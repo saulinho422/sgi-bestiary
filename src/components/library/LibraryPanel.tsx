@@ -122,9 +122,24 @@ export function LibraryPanel({
     ? sheets.find((s) => s.id === viewingSheetId) ?? null
     : null;
 
+  const toggleSelection = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleCreateNew = (kind: SheetCategory, ruleset: Dnd5eRuleset = "dnd5e-2014") => {
+    setEditingSheet(createEmptySheet(kind, ruleset));
+  };
+
+  let content: React.ReactNode;
+
   if (editingSheet) {
     const hasActive = instances.some((i) => i.templateId === editingSheet.id);
-    return (
+    content = (
       <SheetEditorForm
         initialSheet={editingSheet}
         hasActiveInstances={hasActive}
@@ -136,10 +151,8 @@ export function LibraryPanel({
         onCancel={() => setEditingSheet(null)}
       />
     );
-  }
-
-  if (viewingSheet) {
-    return (
+  } else if (viewingSheet) {
+    content = (
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <button
@@ -186,23 +199,9 @@ export function LibraryPanel({
         />
       </div>
     );
-  }
-
-  const toggleSelection = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const handleCreateNew = (kind: SheetCategory, ruleset: Dnd5eRuleset = "dnd5e-2014") => {
-    setEditingSheet(createEmptySheet(kind, ruleset));
-  };
-
-  return (
-    <div className="space-y-2.5 text-xs">
+  } else {
+    content = (
+      <div className="space-y-2.5 text-xs">
       {/* Barra de criação & busca */}
       <div className="flex flex-wrap items-center justify-between gap-1.5">
         <div className="relative flex-1 min-w-[170px]">
@@ -519,8 +518,15 @@ export function LibraryPanel({
           })
         )}
       </div>
+      </div>
+    );
+  }
 
-      {/* Modal rápido de Invocação em Lote */}
+  return (
+    <>
+      {content}
+
+      {/* Modal rápido de Invocação em Lote (disponível em todas as visualizações) */}
       {spawnTarget && (
         <div
           role="dialog"
@@ -603,6 +609,6 @@ export function LibraryPanel({
           setConfirmDeleteTarget(null);
         }}
       />
-    </div>
+    </>
   );
 }

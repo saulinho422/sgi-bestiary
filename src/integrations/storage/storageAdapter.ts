@@ -1,6 +1,7 @@
 import type { BestiarySettings } from "@/domain/entities/settings";
 import type { CreatureSheet } from "@/domain/entities/sheet";
 import type {
+  CombatEncounter,
   ImageTemplateMapping,
   TokenInstance,
 } from "@/domain/entities/tokenInstance";
@@ -36,10 +37,20 @@ export interface SettingsStorageAdapter {
   saveSettings(settings: BestiarySettings): Promise<void>;
 }
 
+export interface EncounterStorageAdapter {
+  listEncountersByScene(sceneId: string): Promise<CombatEncounter[]>;
+  saveEncounter(encounter: CombatEncounter): Promise<void>;
+  deleteEncounter(encounterId: string): Promise<void>;
+  deleteEncountersByScene(sceneId: string): Promise<void>;
+  getActiveEncounterId(sceneId: string): Promise<string | null>;
+  setActiveEncounterId(sceneId: string, encounterId: string | null): Promise<void>;
+}
+
 export interface StorageProvider {
   kind: "indexeddb" | "remote-api";
   library: LibraryStorageAdapter;
   instances: InstanceStorageAdapter;
   mappings: MappingStorageAdapter;
   settings: SettingsStorageAdapter;
+  encounters: EncounterStorageAdapter;
 }

@@ -126,4 +126,55 @@ test.describe("SGI Bestiary — E2E Fluxo Real e Rotas GitHub Pages no Navegador
 
     expect(failedResponses).toEqual([]);
   });
+
+  test("Invocar dentro da ficha, separar Cena de Combate, expandir turno ativo e remover só do combate", async ({
+    page,
+  }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (err) => pageErrors.push(err.message));
+
+    await page.goto("./");
+    await expect(page.getByText("Goblin")).toBeVisible();
+
+    // Abre ficha do Goblin e testa Invocar dentro da ficha (Teste 12)
+    await page.getByText("Goblin").click();
+    await expect(page.getByText("← Voltar à Biblioteca")).toBeVisible();
+    await page.getByRole("button", { name: /^Invocar$/i }).click();
+    await expect(page.getByText("Invocar Goblin")).toBeVisible();
+    await page.getByRole("button", { name: "2×" }).click();
+    await page.getByRole("button", { name: /Invocar 2×/i }).click();
+
+    // Deve continuar na ficha aberta após invocar
+    await expect(page.getByText("← Voltar à Biblioteca")).toBeVisible();
+
+    // Aba Combate começa vazia mesmo com 2 Goblins na Cena
+    await page.getByRole("navigation").getByRole("button", { name: /Combate/i }).click();
+    await expect(
+      page.getByText(/Nenhum participante adicionado ao combate/i),
+    ).toBeVisible();
+
+    // Vai para Cena, seleciona e inclui no combate
+    await page.getByRole("button", { name: /Ir para Cena/i }).click();
+    await page.getByRole("button", { name: /Selecionar todos/i }).click();
+    await page.getByRole("button", { name: /Adicionar ao combate/i }).click();
+    await expect(page.getByText("No combate").first()).toBeVisible();
+
+    // Combate exibe participantes, rola e inicia com card ativo expandido
+    await page.getByRole("navigation").getByRole("button", { name: /Combate/i }).click();
+    await page
+      .getByTitle(/Rolar iniciativa para monstros e NPCs sem iniciativa definida/i)
+      .click();
+    await page.getByRole("button", { name: /Iniciar/i }).click();
+
+    await expect(page.getByText("Turno Ativo")).toBeVisible();
+    await expect(page.getByText(/Ataques \(/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: /Atacar/i }).first()).toBeVisible();
+
+    // Próximo turno mantém 1 card expandido
+    await page.getByRole("button", { name: /Próximo/i }).click();
+    await expect(page.getByText("Turno Ativo")).toBeVisible();
+    await expect(page.locator('[data-expanded="true"]')).toHaveCount(1);
+
+    expect(pageErrors).toEqual([]);
+  });
 });

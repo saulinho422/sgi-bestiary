@@ -9,6 +9,7 @@ export const METADATA_KEYS = {
   SCENE_SETTINGS: getPluginId("scene-settings"),
   ROOM_SETTINGS: getPluginId("room-settings"),
   INITIATIVE_STATE: getPluginId("initiative"),
+  COMBAT_STATE: getPluginId("combat-state"),
 } as const;
 
 export const BROADCAST_CHANNELS = {

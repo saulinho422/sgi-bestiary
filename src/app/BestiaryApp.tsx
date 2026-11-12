@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import OBR from "@owlbear-rodeo/sdk";
+import { getActivePendingSpawnIds } from "@/services/sceneSyncService";
 import { useBestiaryStore } from "@/stores/useBestiaryStore";
 import { resolveAppPath } from "@/utils/assetUrls";
 import { cn } from "@/utils/cn";
@@ -46,6 +47,9 @@ export function BestiaryApp({ initialTab = "library" }: { initialTab?: PrimaryTa
   const role = useBestiaryStore((s) => s.role);
   const sheets = useBestiaryStore((s) => s.sheets);
   const instances = useBestiaryStore((s) => s.instances);
+  const sceneImages = useBestiaryStore((s) => s.sceneImages);
+  const encounters = useBestiaryStore((s) => s.encounters);
+  const activeEncounterId = useBestiaryStore((s) => s.activeEncounterId);
   const publicProjections = useBestiaryStore((s) => s.publicProjectionsByItemId);
   const settings = useBestiaryStore((s) => s.settings);
   const toast = useBestiaryStore((s) => s.toast);
@@ -102,10 +106,26 @@ export function BestiaryApp({ initialTab = "library" }: { initialTab?: PrimaryTa
     ? publicProjections[inlineInspect.itemId]
     : undefined;
 
-  const sceneCount =
-    role === "GM"
-      ? instances.length
-      : Object.keys(publicProjections).length;
+  const sceneCount = (() => {
+    if (role !== "GM") return Object.keys(publicProjections).length;
+    if (obrConnected && sceneReady) {
+      const imageIds = new Set(sceneImages.map((img) => img.id));
+      const pending = getActivePendingSpawnIds();
+      return instances.filter(
+        (i) => imageIds.has(i.boundItemId) || pending.has(i.boundItemId),
+      ).length;
+    }
+    return instances.length;
+  })();
+
+  const activeEncounter =
+    encounters.find((e) => e.id === activeEncounterId) ?? encounters[0] ?? null;
+  const validInstanceIds = new Set(instances.map((i) => i.boundItemId));
+  const combatCount =
+    role === "GM" && activeEncounter
+      ? activeEncounter.participants.filter((p) => validInstanceIds.has(p.itemId))
+          .length
+      : 0;
 
   return (
     <div
@@ -169,6 +189,11 @@ export function BestiaryApp({ initialTab = "library" }: { initialTab?: PrimaryTa
                     {sceneCount}
                   </span>
                 )}
+                {tab.id === "combat" && combatCount > 0 && (
+                  <span className="rounded-full bg-black/20 px-1 text-[10px]">
+                    {combatCount}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -213,7 +238,10 @@ export function BestiaryApp({ initialTab = "library" }: { initialTab?: PrimaryTa
               onClick={() => setInlineInspect(null)}
               className="inline-flex items-center gap-1 rounded border border-stone-300 px-2.5 py-1 text-xs font-medium hover:bg-stone-100 dark:border-slate-700 dark:hover:bg-slate-800"
             >
-              <ArrowLeft className="h-3.5 w-3.5" /> Voltar para Cena
+              <ArrowLeft className="h-3.5 w-3.5" />{" "}
+              {activeTab === "combat"
+                ? "Voltar para Combate"
+                : "Voltar para Cena"}
             </button>
             {role === "GM" && inspectedSheet ? (
               <CreatureStatBlock
@@ -255,9 +283,19 @@ export function BestiaryApp({ initialTab = "library" }: { initialTab?: PrimaryTa
                 onOpenSheetInline={(sheetId, itemId) =>
                   setInlineInspect({ sheetId, itemId })
                 }
+                onNavigateToCombat={() => setActiveTab("combat")}
               />
             )}
-            {activeTab === "combat" && <CombatPanel />}
+            {activeTab === "combat" && (
+              <CombatPanel
+                rollMode={rollMode}
+                rollVisibility={rollVisibility}
+                onNavigateToScene={() => setActiveTab("scene")}
+                onOpenSheetInline={(sheetId, itemId) =>
+                  setInlineInspect({ sheetId, itemId })
+                }
+              />
+            )}
             {activeTab === "import-export" && <ImportExportPanel />}
             {activeTab === "settings" && <SettingsPanel />}
           </>

@@ -2,6 +2,7 @@ import Dexie, { type Table } from "dexie";
 import type { BestiarySettings } from "@/domain/entities/settings";
 import type { CreatureSheet } from "@/domain/entities/sheet";
 import type {
+  CombatEncounter,
   ImageTemplateMapping,
   TokenInstance,
 } from "@/domain/entities/tokenInstance";
@@ -28,6 +29,7 @@ export class SgiBestiaryDexieDb extends Dexie {
   imageMappings!: Table<ImageTemplateMapping, string>;
   settings!: Table<StoredSettingsRow, string>;
   meta!: Table<MetaFlagRow, string>;
+  encounters!: Table<CombatEncounter, string>;
 
   constructor(dbName = "sgi_bestiary_db") {
     super(dbName);
@@ -37,6 +39,14 @@ export class SgiBestiaryDexieDb extends Dexie {
       imageMappings: "signature, templateId, updatedAt",
       settings: "key",
       meta: "key",
+    });
+    this.version(2).stores({
+      sheets: "id, kind, ruleset, name, favorite, updatedAt, *tags",
+      instances: "pk, boundItemId, sceneId, templateId, instanceId, updatedAt",
+      imageMappings: "signature, templateId, updatedAt",
+      settings: "key",
+      meta: "key",
+      encounters: "id, sceneId, updatedAt",
     });
   }
 }

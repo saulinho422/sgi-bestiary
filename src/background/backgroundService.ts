@@ -27,6 +27,7 @@ import {
   ensureSeedLibraryLoaded,
   storageProvider,
   subscribeDbSync,
+  type DbSyncTopic,
 } from "@/integrations/storage/dexieRepository";
 import { SEED_SHEETS } from "@/integrations/storage/seedData";
 import {
@@ -34,8 +35,10 @@ import {
   isCharacterOrMountImage,
   openBindModal,
   openSheetModal,
+  syncActiveEncounterToSceneMetadata,
   syncInstancesToObrItems,
 } from "@/integrations/owlbear/obrBridge";
+import { pruneOrphanRecordsForScene } from "@/services/sceneSyncService";
 import { BROADCAST_CHANNELS, getPluginId, METADATA_KEYS } from "@/utils/pluginId";
 import { resolveExtensionUrl } from "@/utils/assetUrls";
 
@@ -204,6 +207,16 @@ export class SgiBackgroundDaemon {
   private sceneId = "default";
   private sceneDpi = 150;
   private pendingMetadataWrite = false;
+  private processQueue: Promise<void> = Promise.resolve();
+
+  private enqueueSceneWork(task: () => Promise<void>): Promise<void> {
+    const next = this.processQueue.then(task, task);
+    this.processQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
 
   async start(): Promise<void> {
     await ensureSeedLibraryLoaded(SEED_SHEETS);
@@ -246,19 +259,25 @@ export class SgiBackgroundDaemon {
 
   private async attachScene(): Promise<void> {
     if (this.runningScene) return;
+    if (!(await OBR.scene.isReady())) return;
     this.runningScene = true;
 
     this.sceneId = await ensureSceneScopeId();
     this.role = await OBR.player.getRole();
     this.sceneDpi = await OBR.scene.grid.getDpi();
+    if (!(await OBR.scene.isReady())) {
+      this.runningScene = false;
+      return;
+    }
     await this.reloadLocalCaches();
 
     const initialItems = await OBR.scene.items.getItems(isCharacterOrMountImage);
-    await this.processSceneItems(initialItems, true);
+    await this.enqueueSceneWork(() => this.processSceneItems(initialItems, true));
 
     const unsubItems = OBR.scene.items.onChange((allItems) => {
+      if (!this.runningScene) return;
       const images = allItems.filter(isCharacterOrMountImage);
-      void this.processSceneItems(images, false);
+      void this.enqueueSceneWork(() => this.processSceneItems(images, false));
     });
 
     const unsubGrid = OBR.scene.grid.onChange((grid) => {
@@ -313,10 +332,11 @@ export class SgiBackgroundDaemon {
     this.runningScene = false;
   }
 
-  private async handleDbSyncTopic(
-    topic: "sheets" | "instances" | "mappings" | "settings",
-  ): Promise<void> {
+  private async handleDbSyncTopic(topic: DbSyncTopic): Promise<void> {
     await this.reloadLocalCaches();
+    if (topic === "encounters") {
+      return;
+    }
     if (this.role === "GM" && topic === "instances") {
       // Projeta atualizações locais feitas pela UI do Mestre para os itens do OBR
       const items = await OBR.scene.items.getItems(isCharacterOrMountImage);
@@ -518,6 +538,41 @@ export class SgiBackgroundDaemon {
         await syncInstancesToObrItems(toProject, this.sheetsById);
       } finally {
         this.pendingMetadataWrite = false;
+      }
+    }
+
+    // Reconcilia e limpa instâncias órfãs (tokens excluídos diretamente no mapa OBR)
+    // Apenas quando a cena estiver pronta e confirmada no mesmo escopo sceneId.
+    if (this.runningScene && (await OBR.scene.isReady())) {
+      const liveSceneId = await ensureSceneScopeId();
+      if (liveSceneId === this.sceneId) {
+        const validItemIds = new Set(images.map((img) => img.id));
+        const pruneResult = await pruneOrphanRecordsForScene({
+          sceneId: this.sceneId,
+          validItemIds,
+          sheetsById: this.sheetsById,
+        });
+
+        for (const orphanId of pruneResult.orphanItemIds) {
+          this.instancesByItemId.delete(orphanId);
+        }
+
+        if (pruneResult.encountersChanged) {
+          const activeId = await storageProvider.encounters.getActiveEncounterId(
+            this.sceneId,
+          );
+          const activeEnc =
+            pruneResult.encounters.find((e) => e.id === activeId) ??
+            pruneResult.encounters[0] ??
+            null;
+          if (activeEnc) {
+            await syncActiveEncounterToSceneMetadata(
+              activeEnc,
+              this.instancesByItemId,
+              this.sheetsById,
+            );
+          }
+        }
       }
     }
   }

@@ -129,3 +129,23 @@ export interface InitiativeState {
     dexTiebreaker: number;
   }>;
 }
+
+export interface CombatParticipant {
+  itemId: string;
+  initiative: number | null;
+  dexTiebreaker: number;
+  manualOrderAdjustment?: number;
+  addedAt: string;
+}
+
+export interface CombatEncounter {
+  id: string;
+  name: string;
+  sceneId: string;
+  active: boolean;
+  round: number;
+  activeParticipantItemId: string | null;
+  participants: CombatParticipant[];
+  createdAt: string;
+  updatedAt: string;
+}

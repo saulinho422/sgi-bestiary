@@ -6,12 +6,20 @@ import OBR, {
   type Metadata,
 } from "@owlbear-rodeo/sdk";
 import type { ImageAssetMeta, CreatureSheet } from "@/domain/entities/sheet";
-import type { TokenInstance } from "@/domain/entities/tokenInstance";
+import type {
+  CombatEncounter,
+  TokenInstance,
+} from "@/domain/entities/tokenInstance";
 import type { CreatureSize } from "@/domain/types/rpgSystem";
 import {
   computeImageSignature,
   createTokenInstanceFromSheet,
 } from "@/services/instanceService";
+import { buildInitiativeStateFromEncounter } from "@/services/combatService";
+import {
+  clearPendingSpawnItemIds,
+  markPendingSpawnItemIds,
+} from "@/services/sceneSyncService";
 import { projectTokenForPlayers } from "@/domain/rules/visibilityProjection";
 import { storageProvider } from "@/integrations/storage/dexieRepository";
 import { resolveExtensionUrl, resolveMediaAssetUrl } from "@/utils/assetUrls";
@@ -300,13 +308,19 @@ export async function spawnCreaturesOnScene(params: {
     createdInstances.push(instance);
   }
 
-  await storageProvider.instances.saveInstancesBulk(createdInstances);
-  await OBR.scene.items.addItems(builtItems);
-  await OBR.player.select(builtItems.map((i) => i.id));
+  const itemIdsToSpawn = builtItems.map((i) => i.id);
+  markPendingSpawnItemIds(itemIdsToSpawn);
+  try {
+    await OBR.scene.items.addItems(builtItems);
+    await storageProvider.instances.saveInstancesBulk(createdInstances);
+    await OBR.player.select(itemIdsToSpawn);
+  } finally {
+    clearPendingSpawnItemIds(itemIdsToSpawn);
+  }
 
   return {
     instances: createdInstances,
-    itemIds: builtItems.map((i) => i.id),
+    itemIds: itemIdsToSpawn,
   };
 }
 
@@ -381,6 +395,34 @@ export async function unbindItemsFromSheet(itemIds: string[]): Promise<void> {
         }
       }
     });
+  }
+}
+
+export async function deleteObrSceneItems(itemIds: string[]): Promise<void> {
+  if (!OBR.isAvailable || itemIds.length === 0) return;
+  await OBR.scene.items.deleteItems(itemIds);
+}
+
+export async function syncActiveEncounterToSceneMetadata(
+  encounter: CombatEncounter | null,
+  instancesByItemId: Map<string, TokenInstance>,
+  sheetsById: Map<string, CreatureSheet>,
+): Promise<void> {
+  if (!OBR.isAvailable) return;
+  try {
+    const ready = await OBR.scene.isReady();
+    if (!ready) return;
+    const summary = buildInitiativeStateFromEncounter(
+      encounter,
+      instancesByItemId,
+      sheetsById,
+    );
+    await OBR.scene.setMetadata({
+      [METADATA_KEYS.INITIATIVE_STATE]: summary,
+      [METADATA_KEYS.COMBAT_STATE]: encounter,
+    });
+  } catch {
+    // ignora caso a cena esteja em transição
   }
 }
 

@@ -7,12 +7,24 @@ import {
 import type { CreatureSheet, VisibilityPolicy } from "@/domain/entities/sheet";
 import type {
   ActiveCondition,
+  CombatEncounter,
   InitiativeState,
   PublicTokenProjection,
   TokenInstance,
 } from "@/domain/entities/tokenInstance";
-import { tickConditionsOnTurnAdvance } from "@/domain/rules/conditionsCatalog";
-import { getAbilityModifier } from "@/domain/rules/dnd5eRules";
+import {
+  addParticipantsToEncounter,
+  adjustParticipantTieOrder,
+  advanceEncounterTurn,
+  buildInitiativeStateFromEncounter,
+  createCombatEncounter,
+  reconcileEncounterWithValidItems,
+  removeParticipantsFromEncounter,
+  resetEncounterInitiatives,
+  rollEncounterInitiatives,
+  setParticipantInitiative,
+  startEncounterCombat,
+} from "@/services/combatService";
 import {
   addConditionToInstance,
   applySheetUpdateToInstance,
@@ -22,6 +34,7 @@ import {
   updateInstanceVisibility,
   type InstanceHpMutation,
 } from "@/services/instanceService";
+import { pruneOrphanRecordsForScene } from "@/services/sceneSyncService";
 import {
   ensureSeedLibraryLoaded,
   storageProvider,
@@ -30,9 +43,11 @@ import {
 import { SEED_SHEETS } from "@/integrations/storage/seedData";
 import {
   bindItemsToSheet,
+  deleteObrSceneItems,
   ensureSceneScopeId,
   isCharacterOrMountImage,
   spawnCreaturesOnScene,
+  syncActiveEncounterToSceneMetadata,
   syncInstancesToObrItems,
   unbindItemsFromSheet,
 } from "@/integrations/owlbear/obrBridge";
@@ -56,6 +71,8 @@ interface BestiaryStoreState {
   role: "GM" | "PLAYER";
   sheets: CreatureSheet[];
   instances: TokenInstance[];
+  encounters: CombatEncounter[];
+  activeEncounterId: string | null;
   publicProjectionsByItemId: Record<string, PublicTokenProjection>;
   sceneImages: Image[];
   selectedItemIds: string[];
@@ -69,6 +86,7 @@ interface BestiaryStoreState {
   initialize: () => Promise<() => void>;
   refreshLibrary: () => Promise<void>;
   refreshInstances: () => Promise<void>;
+  refreshEncounters: () => Promise<void>;
   saveSheet: (
     sheet: CreatureSheet,
     syncMode?: "future-only" | "existing-preserve-damage" | "existing-reset-hp",
@@ -83,6 +101,7 @@ interface BestiaryStoreState {
     rememberMapping?: boolean,
   ) => Promise<void>;
   unbindTokens: (itemIds: string[]) => Promise<void>;
+  deleteTokensFromScene: (itemIds: string[]) => Promise<void>;
   applyHpMutation: (
     itemIds: string[],
     mutation: InstanceHpMutation,
@@ -103,8 +122,22 @@ interface BestiaryStoreState {
   setConcentrating: (itemId: string, spell: string | null) => Promise<void>;
   consumeResource: (itemId: string, featureId: string, delta: number) => Promise<void>;
   updateSettings: (next: BestiarySettings) => Promise<void>;
+
+  createEncounter: (
+    name?: string,
+    initialParticipantIds?: string[],
+  ) => Promise<CombatEncounter>;
+  selectEncounter: (encounterId: string) => Promise<void>;
+  deleteEncounter: (encounterId: string) => Promise<void>;
+  addParticipantsToCombat: (itemIds: string[]) => Promise<void>;
+  removeParticipantsFromCombat: (itemIds: string[]) => Promise<void>;
   setInstanceInitiative: (itemId: string, value: number | null) => Promise<void>;
-  rollAllInitiatives: () => Promise<void>;
+  adjustParticipantOrder: (itemId: string, direction: "up" | "down") => Promise<void>;
+  rollAllInitiatives: (options?: {
+    rerollExisting?: boolean;
+    onlyItemIds?: string[];
+  }) => Promise<void>;
+  startCombat: () => Promise<void>;
   nextTurn: () => Promise<void>;
   resetInitiative: () => Promise<void>;
 }
@@ -116,6 +149,30 @@ const DEFAULT_INITIATIVE: InitiativeState = {
   order: [],
 };
 
+function computeSummaryForEncounter(
+  encounter: CombatEncounter | null | undefined,
+  instances: TokenInstance[],
+  sheets: CreatureSheet[],
+): InitiativeState {
+  return buildInitiativeStateFromEncounter(
+    encounter,
+    new Map(instances.map((i) => [i.boundItemId, i])),
+    new Map(sheets.map((s) => [s.id, s])),
+  );
+}
+
+function getActiveEncounter(
+  encounters: CombatEncounter[],
+  activeEncounterId: string | null,
+): CombatEncounter | null {
+  if (encounters.length === 0) return null;
+  if (activeEncounterId) {
+    const found = encounters.find((e) => e.id === activeEncounterId);
+    if (found) return found;
+  }
+  return encounters[0] ?? null;
+}
+
 export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
   initialized: false,
   obrConnected: false,
@@ -124,6 +181,8 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
   role: "GM",
   sheets: [],
   instances: [],
+  encounters: [],
+  activeEncounterId: null,
   publicProjectionsByItemId: {},
   sceneImages: [],
   selectedItemIds: [],
@@ -160,6 +219,21 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
     }
   },
 
+  async refreshEncounters() {
+    const { sceneId, role, instances, sheets } = get();
+    if (role !== "GM") return;
+    const [encounters, activeId] = await Promise.all([
+      storageProvider.encounters.listEncountersByScene(sceneId),
+      storageProvider.encounters.getActiveEncounterId(sceneId),
+    ]);
+    const active = getActiveEncounter(encounters, activeId);
+    set({
+      encounters,
+      activeEncounterId: active?.id ?? null,
+      initiative: computeSummaryForEncounter(active, instances, sheets),
+    });
+  },
+
   async initialize() {
     await ensureSeedLibraryLoaded(SEED_SHEETS);
     const [sheets, settings] = await Promise.all([
@@ -176,6 +250,7 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
     const unsubDb = subscribeDbSync((topic) => {
       if (topic === "sheets") void get().refreshLibrary();
       if (topic === "instances") void get().refreshInstances();
+      if (topic === "encounters") void get().refreshEncounters();
       if (topic === "settings") {
         void storageProvider.settings
           .getSettings()
@@ -184,8 +259,12 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
     });
 
     if (!OBR.isAvailable) {
-      const instances =
-        await storageProvider.instances.listInstancesByScene("local-sandbox");
+      const [instances, encounters, activeId] = await Promise.all([
+        storageProvider.instances.listInstancesByScene("local-sandbox"),
+        storageProvider.encounters.listEncountersByScene("local-sandbox"),
+        storageProvider.encounters.getActiveEncounterId("local-sandbox"),
+      ]);
+      const active = getActiveEncounter(encounters, activeId);
       set({
         initialized: true,
         obrConnected: false,
@@ -194,6 +273,9 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
         role: "GM",
         sheets,
         instances,
+        encounters,
+        activeEncounterId: active?.id ?? null,
+        initiative: computeSummaryForEncounter(active, instances, sheets),
         settings,
       });
       return () => {
@@ -213,7 +295,14 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
     const attachSceneState = async () => {
       const sceneReady = await OBR.scene.isReady();
       if (!sceneReady) {
-        set({ sceneReady: false, sceneImages: [], instances: [] });
+        set({
+          sceneReady: false,
+          sceneImages: [],
+          instances: [],
+          encounters: [],
+          activeEncounterId: null,
+          initiative: structuredClone(DEFAULT_INITIATIVE),
+        });
         return;
       }
 
@@ -225,16 +314,86 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
         OBR.scene.getMetadata(),
       ]);
 
+      if (!(await OBR.scene.isReady())) {
+        return;
+      }
+
       const projMap: Record<string, PublicTokenProjection> = {};
       for (const item of items) {
         const proj = readPublicProjectionFromItem(item);
         if (proj) projMap[item.id] = proj;
       }
 
-      const instances =
-        role === "GM"
-          ? await storageProvider.instances.listInstancesByScene(sceneId)
-          : [];
+      const currentSheets = await storageProvider.library.listSheets();
+      const sheetsById = new Map(currentSheets.map((s) => [s.id, s]));
+
+      let instances: TokenInstance[] = [];
+      let encounters: CombatEncounter[] = [];
+      let activeEncounterId: string | null = null;
+
+      if (role === "GM") {
+        const validItemIds = new Set(items.map((i) => i.id));
+        const pruned = await pruneOrphanRecordsForScene({
+          sceneId,
+          validItemIds,
+          sheetsById,
+        });
+        instances = pruned.survivingInstances;
+        encounters = pruned.encounters;
+
+        const remoteCombat = sceneMeta[METADATA_KEYS.COMBAT_STATE] as
+          | CombatEncounter
+          | null
+          | undefined;
+        if (
+          encounters.length === 0 &&
+          remoteCombat &&
+          remoteCombat.sceneId === sceneId
+        ) {
+          const instancesByItemId = new Map(
+            instances.map((i) => [i.boundItemId, i]),
+          );
+          const { encounter: cleanedRemote } = reconcileEncounterWithValidItems(
+            remoteCombat,
+            validItemIds,
+            instancesByItemId,
+            sheetsById,
+          );
+          await storageProvider.encounters.saveEncounter(cleanedRemote);
+          await storageProvider.encounters.setActiveEncounterId(
+            sceneId,
+            cleanedRemote.id,
+          );
+          encounters = [cleanedRemote];
+        }
+
+        const storedActiveId =
+          await storageProvider.encounters.getActiveEncounterId(sceneId);
+        const activeEnc = getActiveEncounter(encounters, storedActiveId);
+        activeEncounterId = activeEnc?.id ?? null;
+
+        const initSummary = computeSummaryForEncounter(
+          activeEnc,
+          instances,
+          currentSheets,
+        );
+
+        set({
+          initialized: true,
+          sceneReady: true,
+          role,
+          sceneId,
+          sheets: currentSheets,
+          sceneImages: items,
+          publicProjectionsByItemId: projMap,
+          instances,
+          encounters,
+          activeEncounterId,
+          selectedItemIds: selection ?? [],
+          initiative: initSummary,
+        });
+        return;
+      }
 
       const initMeta = sceneMeta[METADATA_KEYS.INITIATIVE_STATE] as
         | InitiativeState
@@ -245,9 +404,12 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
         sceneReady: true,
         role,
         sceneId,
+        sheets: currentSheets,
         sceneImages: items,
         publicProjectionsByItemId: projMap,
-        instances,
+        instances: [],
+        encounters: [],
+        activeEncounterId: null,
         selectedItemIds: selection ?? [],
         initiative: initMeta ?? structuredClone(DEFAULT_INITIATIVE),
       });
@@ -274,8 +436,46 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
             sceneImages: images,
             publicProjectionsByItemId: projMap,
           });
-          if (get().role === "GM") {
-            void get().refreshInstances();
+
+          if (get().role === "GM" && get().sceneReady) {
+            const expectedSceneId = get().sceneId;
+            void (async () => {
+              if (!(await OBR.scene.isReady())) return;
+              const liveSceneId = await ensureSceneScopeId();
+              if (liveSceneId !== expectedSceneId || !get().sceneReady) return;
+
+              const sheetsById = new Map(get().sheets.map((s) => [s.id, s]));
+              const pruned = await pruneOrphanRecordsForScene({
+                sceneId: expectedSceneId,
+                validItemIds: new Set(images.map((i) => i.id)),
+                sheetsById,
+              });
+
+              const activeEnc = getActiveEncounter(
+                pruned.encounters,
+                get().activeEncounterId,
+              );
+              const initSummary = computeSummaryForEncounter(
+                activeEnc,
+                pruned.survivingInstances,
+                get().sheets,
+              );
+
+              set({
+                instances: pruned.survivingInstances,
+                encounters: pruned.encounters,
+                activeEncounterId: activeEnc?.id ?? null,
+                initiative: initSummary,
+              });
+
+              if (pruned.encountersChanged) {
+                await syncActiveEncounterToSceneMetadata(
+                  activeEnc,
+                  new Map(pruned.survivingInstances.map((i) => [i.boundItemId, i])),
+                  sheetsById,
+                );
+              }
+            })();
           }
         }),
       );
@@ -295,11 +495,13 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
 
       cleanups.push(
         OBR.scene.onMetadataChange((meta) => {
-          const initMeta = meta[METADATA_KEYS.INITIATIVE_STATE] as
-            | InitiativeState
-            | undefined;
-          if (initMeta) {
-            set({ initiative: initMeta });
+          if (get().role === "PLAYER") {
+            const initMeta = meta[METADATA_KEYS.INITIATIVE_STATE] as
+              | InitiativeState
+              | undefined;
+            if (initMeta) {
+              set({ initiative: initMeta });
+            }
           }
         }),
       );
@@ -417,12 +619,105 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
   },
 
   async unbindTokens(itemIds) {
+    if (itemIds.length === 0) return;
+    const { instances, encounters, activeEncounterId, sheets } = get();
+    const removeSet = new Set(itemIds);
+    const remainingInstances = instances.filter(
+      (i) => !removeSet.has(i.boundItemId),
+    );
+    const instancesByItemId = new Map(
+      remainingInstances.map((i) => [i.boundItemId, i]),
+    );
+    const sheetsById = new Map(sheets.map((s) => [s.id, s]));
+
     await unbindItemsFromSheet(itemIds);
-    await get().refreshInstances();
+
+    const updatedEncounters: CombatEncounter[] = [];
+    for (const enc of encounters) {
+      const { encounter: cleaned, removedCount } = removeParticipantsFromEncounter(
+        enc,
+        itemIds,
+        instancesByItemId,
+        sheetsById,
+      );
+      updatedEncounters.push(cleaned);
+      if (removedCount > 0) {
+        await storageProvider.encounters.saveEncounter(cleaned);
+      }
+    }
+
+    const activeEnc = getActiveEncounter(updatedEncounters, activeEncounterId);
+    set({
+      instances: remainingInstances,
+      encounters: updatedEncounters,
+      initiative: computeSummaryForEncounter(activeEnc, remainingInstances, sheets),
+    });
+
+    await syncActiveEncounterToSceneMetadata(
+      activeEnc,
+      instancesByItemId,
+      sheetsById,
+    );
+
     get().showToast(
       itemIds.length === 1
-        ? "Vínculo removido do token."
-        : `${itemIds.length} tokens desvinculados.`,
+        ? "Vínculo removido do token (token mantido no mapa)."
+        : `${itemIds.length} tokens desvinculados (mantidos no mapa).`,
+      "info",
+    );
+  },
+
+  async deleteTokensFromScene(itemIds) {
+    if (itemIds.length === 0) return;
+    const { sceneId, instances, sceneImages, encounters, activeEncounterId, sheets } =
+      get();
+    const removeSet = new Set(itemIds);
+    const remainingInstances = instances.filter(
+      (i) => !removeSet.has(i.boundItemId),
+    );
+    const remainingImages = sceneImages.filter((img) => !removeSet.has(img.id));
+    const instancesByItemId = new Map(
+      remainingInstances.map((i) => [i.boundItemId, i]),
+    );
+    const sheetsById = new Map(sheets.map((s) => [s.id, s]));
+
+    for (const id of itemIds) {
+      await storageProvider.instances.deleteInstance(id, sceneId);
+    }
+
+    const updatedEncounters: CombatEncounter[] = [];
+    for (const enc of encounters) {
+      const { encounter: cleaned, removedCount } = removeParticipantsFromEncounter(
+        enc,
+        itemIds,
+        instancesByItemId,
+        sheetsById,
+      );
+      updatedEncounters.push(cleaned);
+      if (removedCount > 0) {
+        await storageProvider.encounters.saveEncounter(cleaned);
+      }
+    }
+
+    const activeEnc = getActiveEncounter(updatedEncounters, activeEncounterId);
+    set({
+      instances: remainingInstances,
+      sceneImages: remainingImages,
+      encounters: updatedEncounters,
+      initiative: computeSummaryForEncounter(activeEnc, remainingInstances, sheets),
+    });
+
+    await deleteObrSceneItems(itemIds);
+    await syncActiveEncounterToSceneMetadata(
+      activeEnc,
+      instancesByItemId,
+      sheetsById,
+    );
+
+    get().showToast(
+      itemIds.length === 1
+        ? "Token excluído da cena (ficha mantida na Biblioteca)."
+        : `${itemIds.length} tokens excluídos da cena.`,
       "info",
     );
   },
@@ -488,7 +783,6 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
 
     const nextInstances = instances.map((inst) => {
       if (!targetSet.has(inst.boundItemId)) return inst;
-      // Cada instância recebe cópia independente da condição para evitar mutação compartilhada
       const updated = addConditionToInstance(inst, {
         ...structuredClone(condition),
         id: `${condition.conditionId}-${crypto.randomUUID()}`,
@@ -633,167 +927,335 @@ export const useBestiaryStore = create<BestiaryStoreState>((set, get) => ({
     get().showToast("Configurações salvas.", "success");
   },
 
-  async setInstanceInitiative(itemId, value) {
-    const { instances, sheets, initiative } = get();
+  async createEncounter(name, initialParticipantIds = []) {
+    const { sceneId, encounters, instances, sheets } = get();
+    const instancesByItemId = new Map(instances.map((i) => [i.boundItemId, i]));
     const sheetsById = new Map(sheets.map((s) => [s.id, s]));
-    const updatedInsts = instances.map((inst) =>
-      inst.boundItemId === itemId ? { ...inst, initiative: value } : inst,
+
+    const base = createCombatEncounter({
+      sceneId,
+      name: name?.trim() || `Encontro ${encounters.length + 1}`,
+    });
+    const { encounter: created } =
+      initialParticipantIds.length > 0
+        ? addParticipantsToEncounter(
+            base,
+            initialParticipantIds,
+            instancesByItemId,
+            sheetsById,
+          )
+        : { encounter: base };
+
+    await storageProvider.encounters.saveEncounter(created);
+    await storageProvider.encounters.setActiveEncounterId(sceneId, created.id);
+
+    const nextEncounters = [...encounters, created];
+    set({
+      encounters: nextEncounters,
+      activeEncounterId: created.id,
+      initiative: computeSummaryForEncounter(created, instances, sheets),
+    });
+
+    await syncActiveEncounterToSceneMetadata(created, instancesByItemId, sheetsById);
+    get().showToast(`Combate "${created.name}" criado.`, "success");
+    return created;
+  },
+
+  async selectEncounter(encounterId) {
+    const { sceneId, encounters, instances, sheets } = get();
+    const found = encounters.find((e) => e.id === encounterId);
+    if (!found) return;
+    await storageProvider.encounters.setActiveEncounterId(sceneId, found.id);
+    set({
+      activeEncounterId: found.id,
+      initiative: computeSummaryForEncounter(found, instances, sheets),
+    });
+    await syncActiveEncounterToSceneMetadata(
+      found,
+      new Map(instances.map((i) => [i.boundItemId, i])),
+      new Map(sheets.map((s) => [s.id, s])),
     );
-    const targetInst = updatedInsts.find((i) => i.boundItemId === itemId);
-    if (targetInst) {
-      await storageProvider.instances.saveInstance(targetInst);
+  },
+
+  async deleteEncounter(encounterId) {
+    const { sceneId, encounters, activeEncounterId, instances, sheets } = get();
+    await storageProvider.encounters.deleteEncounter(encounterId);
+    const remaining = encounters.filter((e) => e.id !== encounterId);
+    const nextActive =
+      activeEncounterId === encounterId
+        ? remaining[0] ?? null
+        : getActiveEncounter(remaining, activeEncounterId);
+
+    await storageProvider.encounters.setActiveEncounterId(
+      sceneId,
+      nextActive?.id ?? null,
+    );
+    set({
+      encounters: remaining,
+      activeEncounterId: nextActive?.id ?? null,
+      initiative: computeSummaryForEncounter(nextActive, instances, sheets),
+    });
+    await syncActiveEncounterToSceneMetadata(
+      nextActive,
+      new Map(instances.map((i) => [i.boundItemId, i])),
+      new Map(sheets.map((s) => [s.id, s])),
+    );
+  },
+
+  async addParticipantsToCombat(itemIds) {
+    if (itemIds.length === 0) return;
+    const { sceneId, encounters, activeEncounterId, instances, sheets } = get();
+    const instancesByItemId = new Map(instances.map((i) => [i.boundItemId, i]));
+    const sheetsById = new Map(sheets.map((s) => [s.id, s]));
+
+    let target = getActiveEncounter(encounters, activeEncounterId);
+    let createdNew = false;
+    if (!target) {
+      target = createCombatEncounter({
+        sceneId,
+        name: "Encontro 1",
+      });
+      createdNew = true;
     }
 
-    const order = updatedInsts
-      .filter((i) => typeof i.initiative === "number")
-      .map((i) => {
-        const sh = sheetsById.get(i.templateId);
-        return {
-          itemId: i.boundItemId,
-          initiative: i.initiative as number,
-          dexTiebreaker: sh ? getAbilityModifier(sh.abilities.dex) : 0,
-        };
-      })
-      .sort(
-        (a, b) =>
-          b.initiative - a.initiative || b.dexTiebreaker - a.dexTiebreaker,
-      );
+    const { encounter: updated, addedCount } = addParticipantsToEncounter(
+      target,
+      itemIds,
+      instancesByItemId,
+      sheetsById,
+    );
 
-    const nextInitiative: InitiativeState = {
-      ...initiative,
-      active: order.length > 0 ? initiative.active : false,
-      order,
-      turnIndex: Math.min(initiative.turnIndex, Math.max(0, order.length - 1)),
-    };
+    if (addedCount === 0 && !createdNew) {
+      get().showToast("Criatura(s) já estão neste combate.", "info");
+      return;
+    }
 
-    set({ instances: updatedInsts, initiative: nextInitiative });
-    if (OBR.isAvailable) {
-      await OBR.scene.setMetadata({
-        [METADATA_KEYS.INITIATIVE_STATE]: nextInitiative,
+    await storageProvider.encounters.saveEncounter(updated);
+    if (createdNew) {
+      await storageProvider.encounters.setActiveEncounterId(sceneId, updated.id);
+    }
+
+    const nextEncounters = createdNew
+      ? [...encounters, updated]
+      : encounters.map((e) => (e.id === updated.id ? updated : e));
+
+    set({
+      encounters: nextEncounters,
+      activeEncounterId: updated.id,
+      initiative: computeSummaryForEncounter(updated, instances, sheets),
+    });
+
+    await syncActiveEncounterToSceneMetadata(updated, instancesByItemId, sheetsById);
+    get().showToast(
+      addedCount === 1
+        ? "1 participante adicionado ao combate."
+        : `${addedCount} participantes adicionados ao combate.`,
+      "success",
+    );
+  },
+
+  async removeParticipantsFromCombat(itemIds) {
+    if (itemIds.length === 0) return;
+    const { encounters, activeEncounterId, instances, sheets } = get();
+    const target = getActiveEncounter(encounters, activeEncounterId);
+    if (!target) return;
+
+    const instancesByItemId = new Map(instances.map((i) => [i.boundItemId, i]));
+    const sheetsById = new Map(sheets.map((s) => [s.id, s]));
+
+    const { encounter: updated, removedCount } = removeParticipantsFromEncounter(
+      target,
+      itemIds,
+      instancesByItemId,
+      sheetsById,
+    );
+    if (removedCount === 0) return;
+
+    await storageProvider.encounters.saveEncounter(updated);
+    const nextEncounters = encounters.map((e) =>
+      e.id === updated.id ? updated : e,
+    );
+
+    set({
+      encounters: nextEncounters,
+      initiative: computeSummaryForEncounter(updated, instances, sheets),
+    });
+
+    await syncActiveEncounterToSceneMetadata(updated, instancesByItemId, sheetsById);
+    get().showToast(
+      removedCount === 1
+        ? "Participante removido do combate (token mantido na cena)."
+        : `${removedCount} participantes removidos do combate.`,
+      "info",
+    );
+  },
+
+  async setInstanceInitiative(itemId, value) {
+    const { encounters, activeEncounterId, instances, sheets } = get();
+    const target = getActiveEncounter(encounters, activeEncounterId);
+    if (!target) return;
+
+    const updated = setParticipantInitiative(target, itemId, value);
+    await storageProvider.encounters.saveEncounter(updated);
+
+    const nextEncounters = encounters.map((e) =>
+      e.id === updated.id ? updated : e,
+    );
+    const initSummary = computeSummaryForEncounter(updated, instances, sheets);
+
+    set({
+      encounters: nextEncounters,
+      initiative: initSummary,
+    });
+
+    await syncActiveEncounterToSceneMetadata(
+      updated,
+      new Map(instances.map((i) => [i.boundItemId, i])),
+      new Map(sheets.map((s) => [s.id, s])),
+    );
+  },
+
+  async adjustParticipantOrder(itemId, direction) {
+    const { encounters, activeEncounterId, instances, sheets } = get();
+    const target = getActiveEncounter(encounters, activeEncounterId);
+    if (!target) return;
+
+    const instancesByItemId = new Map(instances.map((i) => [i.boundItemId, i]));
+    const sheetsById = new Map(sheets.map((s) => [s.id, s]));
+    const updated = adjustParticipantTieOrder(
+      target,
+      itemId,
+      direction,
+      instancesByItemId,
+      sheetsById,
+    );
+    if (updated === target) return;
+
+    await storageProvider.encounters.saveEncounter(updated);
+    set({
+      encounters: encounters.map((e) => (e.id === updated.id ? updated : e)),
+      initiative: computeSummaryForEncounter(updated, instances, sheets),
+    });
+
+    await syncActiveEncounterToSceneMetadata(updated, instancesByItemId, sheetsById);
+  },
+
+  async rollAllInitiatives(options) {
+    const { encounters, activeEncounterId, instances, sheets } = get();
+    const target = getActiveEncounter(encounters, activeEncounterId);
+    if (!target || target.participants.length === 0) return;
+
+    const instancesByItemId = new Map(instances.map((i) => [i.boundItemId, i]));
+    const sheetsById = new Map(sheets.map((s) => [s.id, s]));
+
+    const { encounter: updated, rolledItemIds, skippedCharacterIds } =
+      rollEncounterInitiatives(target, instancesByItemId, sheetsById, options);
+
+    if (rolledItemIds.length > 0) {
+      await storageProvider.encounters.saveEncounter(updated);
+      set({
+        encounters: encounters.map((e) => (e.id === updated.id ? updated : e)),
+        initiative: computeSummaryForEncounter(updated, instances, sheets),
       });
+      await syncActiveEncounterToSceneMetadata(updated, instancesByItemId, sheetsById);
+      get().showToast(
+        skippedCharacterIds.length > 0
+          ? `Iniciativa rolada para ${rolledItemIds.length} monstro(s)/NPC(s). ${skippedCharacterIds.length} PJ(s) aguardam valor manual.`
+          : `Iniciativa rolada para ${rolledItemIds.length} participante(s).`,
+        "success",
+      );
+    } else if (skippedCharacterIds.length > 0) {
+      get().showToast(
+        "PJs usam iniciativa manual. Informe os valores diretamente nos cards.",
+        "info",
+      );
+    } else {
+      get().showToast(
+        "Monstros e NPCs já possuem iniciativa definida. Use Rerolar para sortear novamente.",
+        "info",
+      );
     }
   },
 
-  async rollAllInitiatives() {
-    const { instances, sheets } = get();
+  async startCombat() {
+    const { encounters, activeEncounterId, instances, sheets } = get();
+    const target = getActiveEncounter(encounters, activeEncounterId);
+    if (!target || target.participants.length === 0) return;
+
+    const instancesByItemId = new Map(instances.map((i) => [i.boundItemId, i]));
     const sheetsById = new Map(sheets.map((s) => [s.id, s]));
-    const updatedList: TokenInstance[] = [];
 
-    const nextInstances = instances.map((inst) => {
-      const sh = sheetsById.get(inst.templateId);
-      const dexMod = sh ? getAbilityModifier(sh.abilities.dex) : 0;
-      const bonus = sh?.initiativeBonus ?? 0;
-      const roll = Math.floor(Math.random() * 20) + 1 + dexMod + bonus;
-      const upd = { ...inst, initiative: roll };
-      updatedList.push(upd);
-      return upd;
+    const updated = startEncounterCombat(target, instancesByItemId, sheetsById);
+    await storageProvider.encounters.saveEncounter(updated);
+
+    set({
+      encounters: encounters.map((e) => (e.id === updated.id ? updated : e)),
+      initiative: computeSummaryForEncounter(updated, instances, sheets),
     });
-
-    await storageProvider.instances.saveInstancesBulk(updatedList);
-
-    const order = nextInstances
-      .map((i) => {
-        const sh = sheetsById.get(i.templateId);
-        return {
-          itemId: i.boundItemId,
-          initiative: i.initiative ?? 0,
-          dexTiebreaker: sh ? getAbilityModifier(sh.abilities.dex) : 0,
-        };
-      })
-      .sort(
-        (a, b) =>
-          b.initiative - a.initiative || b.dexTiebreaker - a.dexTiebreaker,
-      );
-
-    const nextInitiative: InitiativeState = {
-      active: order.length > 0,
-      round: 1,
-      turnIndex: 0,
-      order,
-    };
-
-    set({ instances: nextInstances, initiative: nextInitiative });
-    if (OBR.isAvailable) {
-      await OBR.scene.setMetadata({
-        [METADATA_KEYS.INITIATIVE_STATE]: nextInitiative,
-      });
-    }
+    await syncActiveEncounterToSceneMetadata(updated, instancesByItemId, sheetsById);
   },
 
   async nextTurn() {
-    const { initiative, instances, sheets } = get();
-    if (initiative.order.length === 0) return;
-
-    const currentEntry = initiative.order[initiative.turnIndex];
-    const nextIndex = (initiative.turnIndex + 1) % initiative.order.length;
-    const isNewRound = nextIndex === 0;
-    const nextRound = isNewRound ? initiative.round + 1 : initiative.round;
-    const nextEntry = initiative.order[nextIndex];
+    const { encounters, activeEncounterId, instances, sheets } = get();
+    const target = getActiveEncounter(encounters, activeEncounterId);
+    if (!target || target.participants.length === 0) return;
 
     const sheetsById = new Map(sheets.map((s) => [s.id, s]));
-    const changedInstances: TokenInstance[] = [];
+    const { encounter: updatedEncounter, changedInstances } = advanceEncounterTurn(
+      target,
+      instances,
+      sheetsById,
+    );
 
-    const nextInstances = instances.map((inst) => {
-      let current = inst;
-      let changed = false;
-
-      if (currentEntry && inst.boundItemId === currentEntry.itemId) {
-        const res = tickConditionsOnTurnAdvance(current.conditions, "end-of-turn");
-        if (res.expired.length > 0) {
-          current = { ...current, conditions: res.next };
-          changed = true;
-        }
-      }
-
-      if (nextEntry && inst.boundItemId === nextEntry.itemId) {
-        const res = tickConditionsOnTurnAdvance(current.conditions, "start-of-turn");
-        if (res.expired.length > 0) {
-          current = { ...current, conditions: res.next };
-          changed = true;
-        }
-      }
-
-      if (isNewRound) {
-        const res = tickConditionsOnTurnAdvance(current.conditions, "round");
-        if (res.expired.length > 0 || res.next !== current.conditions) {
-          current = { ...current, conditions: res.next };
-          changed = true;
-        }
-      }
-
-      if (changed) changedInstances.push(current);
-      return current;
-    });
-
+    let nextInstances = instances;
     if (changedInstances.length > 0) {
+      const changedMap = new Map(
+        changedInstances.map((ci) => [ci.boundItemId, ci]),
+      );
+      nextInstances = instances.map((i) => changedMap.get(i.boundItemId) ?? i);
       await storageProvider.instances.saveInstancesBulk(changedInstances);
       await syncInstancesToObrItems(changedInstances, sheetsById);
     }
 
-    const nextInitiative: InitiativeState = {
-      ...initiative,
-      active: true,
-      round: nextRound,
-      turnIndex: nextIndex,
-    };
+    await storageProvider.encounters.saveEncounter(updatedEncounter);
+    const nextEncounters = encounters.map((e) =>
+      e.id === updatedEncounter.id ? updatedEncounter : e,
+    );
 
-    set({ instances: nextInstances, initiative: nextInitiative });
-    if (OBR.isAvailable) {
-      await OBR.scene.setMetadata({
-        [METADATA_KEYS.INITIATIVE_STATE]: nextInitiative,
-      });
-    }
+    set({
+      instances: nextInstances,
+      encounters: nextEncounters,
+      initiative: computeSummaryForEncounter(
+        updatedEncounter,
+        nextInstances,
+        sheets,
+      ),
+    });
+
+    await syncActiveEncounterToSceneMetadata(
+      updatedEncounter,
+      new Map(nextInstances.map((i) => [i.boundItemId, i])),
+      sheetsById,
+    );
   },
 
   async resetInitiative() {
-    const nextInitiative = structuredClone(DEFAULT_INITIATIVE);
-    const updatedList = get().instances.map((i) => ({ ...i, initiative: null }));
-    await storageProvider.instances.saveInstancesBulk(updatedList);
-    set({ instances: updatedList, initiative: nextInitiative });
-    if (OBR.isAvailable) {
-      await OBR.scene.setMetadata({
-        [METADATA_KEYS.INITIATIVE_STATE]: nextInitiative,
-      });
-    }
+    const { encounters, activeEncounterId, instances, sheets } = get();
+    const target = getActiveEncounter(encounters, activeEncounterId);
+    if (!target) return;
+
+    const updated = resetEncounterInitiatives(target);
+    await storageProvider.encounters.saveEncounter(updated);
+
+    set({
+      encounters: encounters.map((e) => (e.id === updated.id ? updated : e)),
+      initiative: computeSummaryForEncounter(updated, instances, sheets),
+    });
+
+    await syncActiveEncounterToSceneMetadata(
+      updated,
+      new Map(instances.map((i) => [i.boundItemId, i])),
+      new Map(sheets.map((s) => [s.id, s])),
+    );
   },
 }));

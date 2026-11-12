@@ -1,6 +1,9 @@
 import { DEFAULT_SETTINGS } from "@/domain/entities/settings";
 import type { CreatureSheet } from "@/domain/entities/sheet";
-import type { TokenInstance } from "@/domain/entities/tokenInstance";
+import type {
+  CombatEncounter,
+  TokenInstance,
+} from "@/domain/entities/tokenInstance";
 import {
   defaultDexieDb,
   type SgiBestiaryDexieDb,
@@ -8,7 +11,12 @@ import {
 } from "./dexieDatabase";
 import type { StorageProvider } from "./storageAdapter";
 
-export type DbSyncTopic = "sheets" | "instances" | "mappings" | "settings";
+export type DbSyncTopic =
+  | "sheets"
+  | "instances"
+  | "mappings"
+  | "settings"
+  | "encounters";
 
 const DB_SYNC_CHANNEL = "sgi-bestiary-db-sync";
 
@@ -187,6 +195,48 @@ export function createDexieStorageProvider(
           updatedAt: new Date().toISOString(),
         });
         notifyDbSync("settings");
+      },
+    },
+    encounters: {
+      async listEncountersByScene(sceneId) {
+        const rows = await db.encounters
+          .where("sceneId")
+          .equals(sceneId || "default")
+          .toArray();
+        return rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      },
+      async saveEncounter(encounter: CombatEncounter) {
+        await db.encounters.put({
+          ...encounter,
+          sceneId: encounter.sceneId || "default",
+          updatedAt: new Date().toISOString(),
+        });
+        notifyDbSync("encounters");
+      },
+      async deleteEncounter(encounterId: string) {
+        await db.encounters.delete(encounterId);
+        notifyDbSync("encounters");
+      },
+      async deleteEncountersByScene(sceneId: string) {
+        await db.encounters
+          .where("sceneId")
+          .equals(sceneId || "default")
+          .delete();
+        await db.meta.delete(`active-encounter::${sceneId || "default"}`);
+        notifyDbSync("encounters");
+      },
+      async getActiveEncounterId(sceneId: string) {
+        const row = await db.meta.get(`active-encounter::${sceneId || "default"}`);
+        return row?.value || null;
+      },
+      async setActiveEncounterId(sceneId: string, encounterId: string | null) {
+        const key = `active-encounter::${sceneId || "default"}`;
+        if (encounterId) {
+          await db.meta.put({ key, value: encounterId });
+        } else {
+          await db.meta.delete(key);
+        }
+        notifyDbSync("encounters");
       },
     },
   };
