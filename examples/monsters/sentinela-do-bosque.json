@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "example-sentinela-001",
+  "system": "dnd5e",
+  "ruleset": "dnd5e-2014",
+  "kind": "monster",
+  "name": "Sentinela do Bosque",
+  "alias": "Guardião das Trilhas",
+  "portrait": "/tokens/monster.svg",
+  "tokenImage": "/tokens/monster.svg",
+  "description": "Guardião silvestre treinado para proteger ruínas e trilhas antigas.",
+  "size": "MEDIUM",
+  "creatureType": "HUMANOID",
+  "alignment": "NEUTRAL",
+  "source": "SGI Exemplos",
+  "armorClass": {
+    "value": 14,
+    "description": "Armadura natural"
+  },
+  "hitPoints": {
+    "maximum": 27,
+    "formula": "5d8+5"
+  },
+  "speed": {
+    "walk": 9,
+    "fly": null,
+    "swim": null,
+    "climb": null,
+    "burrow": null,
+    "unit": "m"
+  },
+  "abilities": {
+    "str": 14,
+    "dex": 12,
+    "con": 12,
+    "int": 8,
+    "wis": 11,
+    "cha": 9
+  },
+  "proficiencyBonus": 2,
+  "challengeRating": "1",
+  "experiencePoints": 200,
+  "savingThrows": [],
+  "skills": [
+    { "id": "perception", "proficient": true }
+  ],
+  "damageResistances": [],
+  "damageImmunities": [],
+  "damageVulnerabilities": [],
+  "conditionImmunities": [],
+  "senses": ["Percepção passiva 12"],
+  "languages": ["Comum", "Silvestre"],
+  "traits": [],
+  "actions": [
+    {
+      "id": "attack-001",
+      "name": "Espada",
+      "description": "Ataque corpo a corpo com espada longa.",
+      "kind": "action",
+      "attackBonus": 4,
+      "reach": 1.5,
+      "damage": [
+        { "formula": "1d8+2", "type": "slashing" }
+      ]
+    }
+  ],
+  "bonusActions": [],
+  "reactions": [],
+  "legendaryActions": [],
+  "spells": [],
+  "tags": ["floresta", "exemplo"],
+  "visibility": {
+    "publicName": true,
+    "publicHealthBar": true,
+    "publicHealthPercent": false,
+    "publicExactHp": false,
+    "publicTempHp": false,
+    "publicArmorClass": false,
+    "publicConditions": true,
+    "publicSummarySheet": false,
+    "publicFullSheet": false,
+    "playerCanEdit": false
+  },
+  "notes": {
+    "public": "Vigia as ruínas silvestres.",
+    "gm": "Exemplo inicial do sistema — reforços em 2 rodadas se o berrante soar."
+  }
+}

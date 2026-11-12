@@ -1,0 +1,135 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "example-pc-lyra-001",
+  "system": "dnd5e",
+  "ruleset": "dnd5e-2014",
+  "kind": "character",
+  "name": "Lyra Ventofrio",
+  "alias": "Lâmina do Crepúsculo",
+  "portrait": "/tokens/character.svg",
+  "tokenImage": "/tokens/character.svg",
+  "description": "Elfa Patrulheira 3 / Ladina 2 (ficha multiclasse completa).",
+  "size": "MEDIUM",
+  "creatureType": "HUMANOID",
+  "subtype": "Elfo",
+  "alignment": "Caótico e Bom",
+  "source": "Ficha de Jogador",
+  "armorClass": {
+    "value": 16,
+    "description": "Couro batido + DES"
+  },
+  "hitPoints": {
+    "maximum": 41,
+    "current": 41,
+    "temporary": 0,
+    "formula": "3d10+2d8+10",
+    "hitDie": "d10",
+    "hitDiceTotal": 5,
+    "hitDiceAvailable": 5
+  },
+  "speed": {
+    "walk": 10.5,
+    "fly": null,
+    "swim": null,
+    "climb": null,
+    "burrow": null,
+    "unit": "m"
+  },
+  "abilities": {
+    "str": 10,
+    "dex": 18,
+    "con": 14,
+    "int": 12,
+    "wis": 14,
+    "cha": 11
+  },
+  "proficiencyBonus": 3,
+  "challengeRating": "5",
+  "experiencePoints": 6500,
+  "savingThrows": [
+    { "ability": "str", "proficient": true },
+    { "ability": "dex", "proficient": true }
+  ],
+  "skills": [
+    { "id": "stealth", "proficient": true, "expertise": true },
+    { "id": "perception", "proficient": true }
+  ],
+  "damageResistances": [],
+  "damageImmunities": [],
+  "damageVulnerabilities": [],
+  "conditionImmunities": [],
+  "senses": ["Visão no Escuro 18 m"],
+  "languages": ["Comum", "Élfico"],
+  "traits": [],
+  "actions": [
+    {
+      "id": "lyra-longbow",
+      "name": "Arco Longo +1",
+      "description": "Ataque à distância.",
+      "kind": "action",
+      "attackBonus": 8,
+      "range": "45/180 m",
+      "damage": [{ "formula": "1d8+5", "type": "perfurante" }]
+    }
+  ],
+  "bonusActions": [],
+  "reactions": [],
+  "legendaryActions": [],
+  "spells": [
+    {
+      "id": "spell-mark",
+      "name": "Marca do Caçador",
+      "description": "+1d6 de dano contra o alvo marcado.",
+      "kind": "spell",
+      "spellLevel": 1,
+      "concentration": true,
+      "prepared": true,
+      "damage": [{ "formula": "1d6", "type": "força" }]
+    }
+  ],
+  "resources": [
+    {
+      "id": "res-favored",
+      "name": "Inimigo Favorito",
+      "description": "Usos diários.",
+      "kind": "resource",
+      "maxUses": 3,
+      "availableUses": 3,
+      "rechargeOn": "long-rest"
+    }
+  ],
+  "characterDetails": {
+    "species": "Elfo da Floresta",
+    "classes": [
+      { "id": "c1", "name": "Patrulheiro", "subclass": "Caçador", "level": 3, "hitDie": "d10" },
+      { "id": "c2", "name": "Ladino", "subclass": "Assassino", "level": 2, "hitDie": "d8" }
+    ],
+    "level": 5,
+    "background": "Forasteiro",
+    "inspiration": true,
+    "experiencePoints": 6500,
+    "proficiencies": {
+      "armor": ["Leve", "Média", "Escudos"],
+      "weapons": ["Simples", "Marciais"],
+      "tools": ["Ferramentas de ladrão"]
+    },
+    "inventory": [
+      { "id": "i1", "name": "Arco Longo +1", "quantity": 1, "weight": 1, "equipped": true },
+      { "id": "i2", "name": "Poção de Cura", "quantity": 2, "weight": 0.5 }
+    ],
+    "currency": { "cp": 0, "sp": 14, "ep": 0, "gp": 85, "pp": 2 },
+    "spellcasting": {
+      "ability": "wis",
+      "saveDc": 13,
+      "attackBonus": 5,
+      "concentratingOn": null,
+      "slots": { "1": { "max": 3, "used": 0 } }
+    },
+    "deathSaves": { "successes": 0, "failures": 0 }
+  },
+  "tags": ["pj", "elfa", "multiclasse"],
+  "notes": {
+    "public": "Batedora do grupo.",
+    "gm": ""
+  }
+}

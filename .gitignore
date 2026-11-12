@@ -1,0 +1,23 @@
+# Dependências e builds
+node_modules/
+dist/
+
+# Logs e caches locais
+*.log
+*.tsbuildinfo
+.eslintcache
+
+# Testes e cobertura
+coverage/
+test-results/
+playwright-report/
+blob-report/
+
+# Variáveis de ambiente locais
+.env
+.env.local
+.env.*.local
+
+# Sistema operacional / editor
+.DS_Store
+Thumbs.db

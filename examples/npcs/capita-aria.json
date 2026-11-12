@@ -1,0 +1,94 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "example-npc-aria-2024",
+  "system": "dnd5e",
+  "ruleset": "dnd5e-2024",
+  "kind": "npc",
+  "name": "Capitã Aria Valen",
+  "alias": "Comandante da Vigília",
+  "portrait": "/tokens/npc.svg",
+  "tokenImage": "/tokens/npc.svg",
+  "description": "Oficial pragmática da guarda da cidadela (ficha compatível com D&D 5e 2024).",
+  "size": "MEDIUM",
+  "creatureType": "HUMANOID",
+  "subtype": "Humano",
+  "alignment": "Leal e Neutro",
+  "source": "SGI Exemplos (2024)",
+  "armorClass": {
+    "value": 18,
+    "description": "Cota de talas + escudo"
+  },
+  "hitPoints": {
+    "maximum": 52,
+    "formula": "8d8+16"
+  },
+  "speed": {
+    "walk": 9,
+    "fly": null,
+    "swim": null,
+    "climb": null,
+    "burrow": null,
+    "unit": "m"
+  },
+  "abilities": {
+    "str": 16,
+    "dex": 12,
+    "con": 14,
+    "int": 11,
+    "wis": 14,
+    "cha": 13
+  },
+  "proficiencyBonus": 3,
+  "initiativeBonus": 2,
+  "challengeRating": "3",
+  "experiencePoints": 700,
+  "savingThrows": [
+    { "ability": "str", "proficient": true },
+    { "ability": "con", "proficient": true }
+  ],
+  "skills": [
+    { "id": "athletics", "proficient": true },
+    { "id": "insight", "proficient": true }
+  ],
+  "damageResistances": [],
+  "damageImmunities": [],
+  "damageVulnerabilities": [],
+  "conditionImmunities": [],
+  "senses": [],
+  "languages": ["Comum", "Anão"],
+  "traits": [
+    {
+      "id": "aria-mastery",
+      "name": "Maestria em Arma: Empurrar (2024)",
+      "description": "Ao atingir criatura Grande ou menor, pode empurrá-la até 3 m.",
+      "kind": "trait"
+    }
+  ],
+  "actions": [
+    {
+      "id": "aria-pike",
+      "name": "Lança Longa",
+      "description": "Ataque corpo a corpo com arma.",
+      "kind": "action",
+      "attackBonus": 6,
+      "reach": 3,
+      "damage": [{ "formula": "1d10+3", "type": "perfurante" }]
+    }
+  ],
+  "bonusActions": [],
+  "reactions": [
+    {
+      "id": "aria-parry",
+      "name": "Aparar",
+      "description": "+3 na CA contra 1 ataque corpo a corpo.",
+      "kind": "reaction"
+    }
+  ],
+  "legendaryActions": [],
+  "spells": [],
+  "tags": ["npc", "aliado", "2024"],
+  "notes": {
+    "public": "Contrata escolta para caravanas.",
+    "gm": "Possui a senha secreta do portão norte."
+  }
+}
