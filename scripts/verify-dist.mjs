@@ -51,6 +51,12 @@ assert(
   `manifest_version deve ser 1 para compatibilidade oficial OBR (recebido: ${String(manifest.manifest_version)})`,
 );
 assert(typeof manifest.name === "string" && manifest.name.length > 0, "manifest.name ausente");
+assert(
+  typeof manifest.description === "string" &&
+    manifest.description.length > 0 &&
+    manifest.description.length <= 128,
+  `manifest.description deve ter entre 1 e 128 caracteres (atual: ${String(manifest.description?.length ?? 0)})`,
+);
 assert(typeof manifest.version === "string" && manifest.version.length > 0, "manifest.version ausente");
 assert(manifest.action && typeof manifest.action === "object", "manifest.action ausente");
 

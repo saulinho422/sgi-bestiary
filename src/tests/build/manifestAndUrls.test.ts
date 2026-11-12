@@ -73,6 +73,7 @@ describe("Compatibilidade do manifesto OBR e resolução de URLs para GitHub Pag
       manifest_version: number;
       author: string;
       homepage_url: string;
+      description: string;
       icon: string;
       background_url: string;
       action: {
@@ -86,6 +87,8 @@ describe("Compatibilidade do manifesto OBR e resolução de URLs para GitHub Pag
 
     expect(manifest.manifest_version).toBe(1);
     expect(manifest.name).toBe("SGI Bestiary");
+    expect(manifest.description.length).toBeGreaterThan(0);
+    expect(manifest.description.length).toBeLessThanOrEqual(128);
     expect(manifest.action.height).toBeGreaterThan(0);
     expect(manifest.action.width).toBeGreaterThan(0);
 

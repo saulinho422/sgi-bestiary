@@ -6,7 +6,7 @@
   "homepage_url": "https://github.com/saulinho422/sgi-bestiary",
   "icon": "https://saulinho422.github.io/sgi-bestiary/icons/logo.svg",
   "background_url": "https://saulinho422.github.io/sgi-bestiary/src/background/background.html",
-  "description": "Gerenciador completo de fichas D&D 5e (2014/2024), instâncias independentes de tokens e HUD tático em tempo real para Owlbear Rodeo.",
+  "description": "Gerenciador de fichas D&D 5e (2014/2024), instâncias independentes de tokens e HUD tático para Owlbear Rodeo.",
   "action": {
     "title": "SGI Bestiary",
     "icon": "https://saulinho422.github.io/sgi-bestiary/icon.svg",
