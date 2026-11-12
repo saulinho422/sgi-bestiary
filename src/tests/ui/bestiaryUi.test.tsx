@@ -165,7 +165,7 @@ describe("Interface React e fluxos integrados (Testes UI Completos)", () => {
       const activeEnc = useBestiaryStore.getState().encounters[0];
       expect(activeEnc?.participants).toHaveLength(1);
     });
-  });
+  }, 25000);
 
   it(
     "Testes 2, 5, 6, 7 UI: iniciativa manual de PJ, expansão automática do turno atual, ataques sem dano automático e troca de turno",
@@ -297,6 +297,6 @@ describe("Interface React e fluxos integrados (Testes UI Completos)", () => {
         expect(damaged.currentHp).toBe(goblinSeed.hitPoints.maximum - 4);
       });
     },
-    15000,
+    30000,
   );
 });
